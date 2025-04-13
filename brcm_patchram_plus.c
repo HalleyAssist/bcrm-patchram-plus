@@ -549,20 +549,34 @@ init_uart()
 	tcsetattr(uart_fd, TCSANOW, &termios);
 }
 
+const char format_strings [][50] = {
+	"%02x\n", // 1
+	"%02x %02x\n", // 2
+	"%02x %02x %02x\n", // 3
+	"%02x %02x %02x %02x\n", // 4
+	"%02x %02x %02x %02x %02x\n", // 5
+	"%02x %02x %02x %02x %02x %02x\n", // 6
+	"%02x %02x %02x %02x %02x %02x %02x\n", // 7
+	"%02x %02x %02x %02x %02x %02x %02x %02x\n", // 8	
+};
+
 void
 dump(uchar *out, int len)
 {
-	int i;
+	int i, f;
+	char *fmt;
 
-	for (i = 0; i < len; i++) {
-		if (i && !(i % 16)) {
-			fprintf(stderr, "\n");
+	for (i = 0; i < len; i+=8) {
+		f = len - i;
+		if (f > 8) {
+			f = 8;
 		}
+		fmt = format_strings[f - 1];
 
-		fprintf(stderr, "%02x ", out[i]);
+		fprintf(stderr, fmt, out[i], out[i + 1], out[i + 2],
+			out[i + 3], out[i + 4], out[i + 5],
+			out[i + 6], out[i + 7]);
 	}
-
-	fprintf(stderr, "\n");
 }
 
 void
