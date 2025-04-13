@@ -271,6 +271,14 @@ validate_baudrate(int baud_rate, int *value)
 }
 
 int
+parse_debug(char *optarg)
+{
+	debug = atoi(optarg);
+
+	return(0);
+}
+
+int
 parse_baudrate(char *optarg)
 {
 	int baudrate = atoi(optarg);
@@ -396,7 +404,7 @@ void
 usage(char *argv0)
 {
 	printf("Usage %s:\n", argv0);
-	printf("\t<-d> to print a debug log\n");
+	printf("\t<-d>/<--debug n> to print a debug log\n");
 	printf("\t<--patchram patchram_file>\n");
 	printf("\t<--baudrate baud_rate>\n");
 	printf("\t<--bd_addr bd_address>\n");
@@ -445,7 +453,7 @@ parse_cmd_line(int argc, char **argv)
 
 	typedef int (*PFI)();
 
-	PFI parse[] = { parse_patchram, parse_baudrate,
+	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate,
 		parse_bdaddr, parse_enable_lpm, parse_enable_hci,
 		parse_use_baudrate_for_download,
 		parse_scopcm, parse_i2s, parse_no2bytes, parse_tosleep};
@@ -456,6 +464,7 @@ parse_cmd_line(int argc, char **argv)
 
 		static struct option long_options[] = {
 			{"patchram", 1, 0, 0},
+			{"debug", 1, 0, 0},
 			{"baudrate", 1, 0, 0},
 			{"bd_addr", 1, 0, 0},
 			{"enable_lpm", 0, 0, 0},
@@ -565,6 +574,8 @@ dump(uchar *out, int len)
 {
 	int i, f;
 	char *fmt;
+
+	if(debug <= 1) return;
 
 	for (i = 0; i < len; i+=8) {
 		f = len - i;
