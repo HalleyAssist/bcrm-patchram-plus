@@ -124,6 +124,7 @@
 
 #include <string.h>
 #include <signal.h>
+#include <stdbool.h>
 
 #ifdef ANDROID
 #include <cutils/properties.h>
@@ -167,7 +168,8 @@ int no2bytes = 0;
 int tosleep = 0;
 
 struct termios termios;
-uchar buffer[1024];
+uchar buffer[512];
+uchar buffer2[512];
 
 uchar hci_reset[] = { 0x01, 0x03, 0x0c, 0x00 };
 
@@ -591,21 +593,27 @@ dump(uchar *out, int len)
 }
 
 void
-read_event(int fd, uchar *buffer)
+read_event(int fd, uchar *b)
 {
 	int i = 0;
 	int len = 3;
 	int count;
 
-	while ((count = read(fd, &buffer[i], len)) < len) {
+	// read first 3 bytes of event (HCI_EVENT_PKT, EVENT_CODE, LEN)
+	while ((count = read(fd, &b[i], len)) < len) {
 		i += count;
 		len -= count;
 	}
 
 	i += count;
-	len = buffer[2];
+	len = b[2];
+	
+	if(len > sizeof(buffer) - 3) {
+		fprintf(stderr, "Error: Event length %d is too long\n", len);
+		exit(1);
+	}
 
-	while ((count = read(fd, &buffer[i], len)) < len) {
+	while ((count = read(fd, &b[i], len)) < len) {
 		i += count;
 		len -= count;
 	}
@@ -614,7 +622,7 @@ read_event(int fd, uchar *buffer)
 		count += i;
 
 		fprintf(stderr, "received %d\n", count);
-		dump(buffer, count);
+		dump(b, count);
 	}
 }
 
@@ -651,6 +659,15 @@ proc_reset()
 	alarm(0);
 }
 
+static bool hci_is_event(uchar *buf)
+{
+	if (buf[0] != 0x04 || buf[1] != 0x0e) { // EVT_CMD_COMPLETE = 0x0e
+		return false;
+	}
+
+	return true;
+}
+
 void
 proc_patchram()
 {
@@ -658,7 +675,17 @@ proc_patchram()
 
 	hci_send_cmd(hci_download_minidriver, sizeof(hci_download_minidriver));
 
-	read_event(uart_fd, buffer);
+	read_event(uart_fd, buffer2);
+
+	if(!hci_is_event(buffer2)) {
+		fprintf(stderr, "Error: No event received to hci_download_minidriver\n");
+		exit(1);
+	}
+
+	if(buffer2[6] != 0x00) {
+		fprintf(stderr, "Error: hci_download_minidriver failed\n");
+		exit(1);
+	}
 
 	if (!no2bytes) {
 		read(uart_fd, &buffer[0], 2);
@@ -672,12 +699,32 @@ proc_patchram()
 		buffer[0] = 0x01;
 
 		len = buffer[3];
+	
+		if(len > sizeof(buffer) - 4) {
+			fprintf(stderr, "Error: CMD length %d is too long\n", len);
+			exit(1);
+		}
 
 		read(hcdfile_fd, &buffer[4], len);
 
 		hci_send_cmd(buffer, len + 4);
 
-		read_event(uart_fd, buffer);
+		read_event(uart_fd, buffer2);
+
+		if(!hci_is_event(buffer2)) {
+			fprintf(stderr, "Error: No event received to hcdfile_fd (retry recv)\n");
+			read_event(uart_fd, buffer2);
+			
+			if(!hci_is_event(buffer2)) {
+				fprintf(stderr, "Error: No event received to hcdfile_fd\n");
+				exit(1);
+			}
+		}
+
+		if(buffer2[6] != 0x00) {
+			fprintf(stderr, "Error: hcdfile_fd failed\n");
+			exit(1);
+		}
 	}
 
 	if (use_baudrate_for_download) {
