@@ -122,6 +122,8 @@
 #include <limits.h>
 #endif
 
+#include <unistd.h>
+
 #include <string.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -575,7 +577,7 @@ void
 dump(uchar *out, int len)
 {
 	int i, f;
-	char *fmt;
+	const char *fmt;
 
 	if(debug <= 1) return;
 
@@ -607,11 +609,6 @@ read_event(int fd, uchar *b)
 
 	i += count;
 	len = b[2];
-	
-	if(len > sizeof(buffer) - 3) {
-		fprintf(stderr, "Error: Event length %d is too long\n", len);
-		exit(1);
-	}
 
 	while ((count = read(fd, &b[i], len)) < len) {
 		i += count;
