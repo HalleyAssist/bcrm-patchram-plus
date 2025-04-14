@@ -104,6 +104,7 @@
 
 // TODO: Integrate BCM support into Bluez hciattach
 
+#define _GNU_SOURCE         /* See feature_test_macros(7) */
 #include <stdio.h>
 #include <getopt.h>
 #include <errno.h>
@@ -114,45 +115,37 @@
 
 #include <stdlib.h>
 
-#ifdef ANDROID
-#include <termios.h>
-#else
 #include <sys/termios.h>
 #include <sys/ioctl.h>
 #include <limits.h>
-#endif
 
 #include <unistd.h>
 
 #include <string.h>
 #include <signal.h>
 #include <stdbool.h>
+#include <poll.h>
 
-#ifdef ANDROID
-#include <cutils/properties.h>
-#define LOG_TAG "brcm_patchram_plus"
-#include <cutils/log.h>
-#undef printf
-#define printf ALOGD
-#undef fprintf
-#define fprintf(x, ...) \
-  { if(x==stderr) ALOGE(__VA_ARGS__); else fprintf(x, __VA_ARGS__); }
 
-#endif //ANDROID
-
-#ifndef N_HCI
-#define N_HCI	15
-#endif
 
 #define HCIUARTSETPROTO		_IOW('U', 200, int)
 #define HCIUARTGETPROTO		_IOR('U', 201, int)
 #define HCIUARTGETDEVICE	_IOR('U', 202, int)
+#define HCIUARTSETFLAGS		_IOW('U', 203, int)
+#define HCIUARTGETFLAGS		_IOR('U', 204, int)
 
-#define HCI_UART_H4		0
+#define HCI_UART_H4	0
 #define HCI_UART_BCSP	1
 #define HCI_UART_3WIRE	2
 #define HCI_UART_H4DS	3
-#define HCI_UART_LL		4
+#define HCI_UART_LL	4
+#define HCI_UART_ATH3K  5
+#define HCI_UART_INTEL	6
+#define HCI_UART_BCM	7
+#define HCI_UART_QCA	8
+#define HCI_UART_AG6XX	9
+#define HCI_UART_NOKIA	10
+#define HCI_UART_MRVL	11
 
 typedef unsigned char uchar;
 
@@ -160,20 +153,16 @@ int uart_fd = -1;
 int hcdfile_fd = -1;
 int termios_baudrate = 0;
 int bdaddr_flag = 0;
-int enable_lpm = 0;
 int enable_hci = 0;
 int use_baudrate_for_download = 0;
 int debug = 0;
 int scopcm = 0;
-int i2s = 0;
 int no2bytes = 0;
 int tosleep = 0;
 
 struct termios termios;
 uchar buffer[512];
 uchar buffer2[512];
-
-uchar hci_reset[] = { 0x01, 0x03, 0x0c, 0x00 };
 
 uchar hci_download_minidriver[] = { 0x01, 0x2e, 0xfc, 0x00 };
 
@@ -183,18 +172,11 @@ uchar hci_update_baud_rate[] = { 0x01, 0x18, 0xfc, 0x06, 0x00, 0x00,
 uchar hci_write_bd_addr[] = { 0x01, 0x01, 0xfc, 0x06,
 	0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
-uchar hci_write_sleep_mode[] = { 0x01, 0x27, 0xfc, 0x0c,
-	0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00,
-	0x00, 0x00 };
-
 uchar hci_write_sco_pcm_int[] =
 	{ 0x01, 0x1C, 0xFC, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 uchar hci_write_pcm_data_format[] =
 	{ 0x01, 0x1e, 0xFC, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-uchar hci_write_i2spcm_interface_param[] =
-	{ 0x01, 0x6d, 0xFC, 0x04, 0x00, 0x00, 0x00, 0x00 };
 
 int
 parse_patchram(char *optarg)
@@ -229,10 +211,10 @@ BRCM_encode_baud_rate(uint baud_rate, uchar *encoded_baud)
 		return;
 	}
 
-	encoded_baud[3] = (uchar)(baud_rate >> 24);
-	encoded_baud[2] = (uchar)(baud_rate >> 16);
-	encoded_baud[1] = (uchar)(baud_rate >> 8);
 	encoded_baud[0] = (uchar)(baud_rate & 0xFF);
+	encoded_baud[1] = (uchar)(baud_rate >> 8);
+	encoded_baud[2] = (uchar)(baud_rate >> 16);
+	encoded_baud[3] = (uchar)(baud_rate >> 24);
 }
 
 typedef struct {
@@ -240,28 +222,29 @@ typedef struct {
 	int termios_value;
 } tBaudRates;
 
-tBaudRates baud_rates[] = {
-	{ 115200, B115200 },
-	{ 230400, B230400 },
-	{ 460800, B460800 },
-	{ 500000, B500000 },
-	{ 576000, B576000 },
-	{ 921600, B921600 },
-	{ 1000000, B1000000 },
-	{ 1152000, B1152000 },
-	{ 1500000, B1500000 },
-	{ 2000000, B2000000 },
-	{ 2500000, B2500000 },
-	{ 3000000, B3000000 },
-#ifndef __CYGWIN__
-	{ 3500000, B3500000 },
-	{ 4000000, B4000000 }
-#endif
-};
-
 int
 validate_baudrate(int baud_rate, int *value)
 {
+	const tBaudRates baud_rates [] = {
+		{ 115200, B115200 },
+		{ 230400, B230400 },
+		{ 460800, B460800 },
+		{ 500000, B500000 },
+		{ 576000, B576000 },
+		{ 921600, B921600 },
+		{ 1000000, B1000000 },
+		{ 1152000, B1152000 },
+		{ 1500000, B1500000 },
+		{ 2000000, B2000000 },
+		{ 2500000, B2500000 },
+		{ 3000000, B3000000 },
+	#ifndef __CYGWIN__
+		{ 3500000, B3500000 },
+		{ 4000000, B4000000 }
+	#endif
+	};
+
+
 	unsigned int i;
 
 	for (i = 0; i < (sizeof(baud_rates) / sizeof(tBaudRates)); i++) {
@@ -286,10 +269,13 @@ int
 parse_baudrate(char *optarg)
 {
 	int baudrate = atoi(optarg);
+	fprintf(stderr, "Baudrate %d\n", baudrate);
 
-	if (validate_baudrate(baudrate, &termios_baudrate)) {
-		BRCM_encode_baud_rate(baudrate, &hci_update_baud_rate[6]);
+	if (!validate_baudrate(baudrate, &termios_baudrate)) {
+		fprintf(stderr, "Baudrate %d not supported!\n", baudrate);
+		exit(1);
 	}
+	BRCM_encode_baud_rate(baudrate, &hci_update_baud_rate[6]);
 
 	return(0);
 }
@@ -310,13 +296,6 @@ parse_bdaddr(char *optarg)
 
 	bdaddr_flag = 1;
 
-	return(0);
-}
-
-int
-parse_enable_lpm(char *optarg)
-{
-	enable_lpm = 1;
 	return(0);
 }
 
@@ -363,29 +342,6 @@ parse_scopcm(char *optarg)
 }
 
 int
-parse_i2s(char *optarg)
-{
-	int param[4];
-	int ret;
-	int i;
-
-	ret = sscanf(optarg, "%d,%d,%d,%d", &param[0], &param[1], &param[2],
-		&param[3]);
-
-	if (ret != 4) {
-		return(1);
-	}
-
-	i2s = 1;
-
-	for (i = 0; i < 4; i++) {
-		hci_write_i2spcm_interface_param[4 + i] = param[i];
-	}
-
-	return(0);
-}
-
-int
 parse_no2bytes(char *optarg)
 {
 	no2bytes = 1;
@@ -412,7 +368,6 @@ usage(char *argv0)
 	printf("\t<--patchram patchram_file>\n");
 	printf("\t<--baudrate baud_rate>\n");
 	printf("\t<--bd_addr bd_address>\n");
-	printf("\t<--enable_lpm>\n");
 	printf("\t<--enable_hci>\n");
 	printf("\t<--use_baudrate_for_download> - Uses the\n");
 	printf("\t\tbaudrate for downloading the firmware\n");
@@ -458,9 +413,9 @@ parse_cmd_line(int argc, char **argv)
 	typedef int (*PFI)();
 
 	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate,
-		parse_bdaddr, parse_enable_lpm, parse_enable_hci,
+		parse_bdaddr, parse_enable_hci,
 		parse_use_baudrate_for_download,
-		parse_scopcm, parse_i2s, parse_no2bytes, parse_tosleep};
+		parse_scopcm, parse_no2bytes, parse_tosleep};
 
 	while (1) {
 		int this_option_optind = optind ? optind : 1;
@@ -471,11 +426,9 @@ parse_cmd_line(int argc, char **argv)
 			{"debug", 1, 0, 0},
 			{"baudrate", 1, 0, 0},
 			{"bd_addr", 1, 0, 0},
-			{"enable_lpm", 0, 0, 0},
 			{"enable_hci", 0, 0, 0},
 			{"use_baudrate_for_download", 0, 0, 0},
 			{"scopcm", 1, 0, 0},
-			{"i2s", 1, 0, 0},
 			{"no2bytes", 0, 0, 0},
 			{"tosleep", 1, 0, 0},
 			{0, 0, 0, 0}
@@ -537,29 +490,27 @@ parse_cmd_line(int argc, char **argv)
 void
 init_uart()
 {
+	int ld;
+
 	tcflush(uart_fd, TCIOFLUSH);
 	tcgetattr(uart_fd, &termios);
 
-#ifndef __CYGWIN__
 	cfmakeraw(&termios);
-#else
-	termios.c_iflag &= ~(IGNBRK | BRKINT | PARMRK | ISTRIP
-                | INLCR | IGNCR | ICRNL | IXON);
-	termios.c_oflag &= ~OPOST;
-	termios.c_lflag &= ~(ECHO | ECHONL | ICANON | ISIG | IEXTEN);
-	termios.c_cflag &= ~(CSIZE | PARENB);
-	termios.c_cflag |= CS8;
-#endif
 
-	termios.c_cflag |= CRTSCTS;
+	termios.c_cflag |= CRTSCTS | CLOCAL;
 	tcsetattr(uart_fd, TCSANOW, &termios);
-	tcflush(uart_fd, TCIOFLUSH);
-	tcsetattr(uart_fd, TCSANOW, &termios);
-	tcflush(uart_fd, TCIOFLUSH);
-	tcflush(uart_fd, TCIOFLUSH);
+	
 	cfsetospeed(&termios, B115200);
 	cfsetispeed(&termios, B115200);
 	tcsetattr(uart_fd, TCSANOW, &termios);
+
+	tcflush(uart_fd, TCIOFLUSH);
+
+	ld = N_TTY;
+	if (ioctl(uart_fd, TIOCSETD, &ld) < 0) {
+		perror("Can't restore line discipline");
+		exit(1);
+	}
 }
 
 const char format_strings [][50] = {
@@ -574,7 +525,7 @@ const char format_strings [][50] = {
 };
 
 void
-dump(uchar *out, int len)
+dump(const uchar *out, int len)
 {
 	int i, f;
 	const char *fmt;
@@ -624,7 +575,7 @@ read_event(int fd, uchar *b)
 }
 
 void
-hci_send_cmd(uchar *buf, int len)
+hci_send_cmd(const uchar *buf, int len)
 {
 	if (debug) {
 		fprintf(stderr, "writing\n");
@@ -637,6 +588,8 @@ hci_send_cmd(uchar *buf, int len)
 void
 expired(int sig)
 {
+	const uchar hci_reset[] = { 0x01, 0x03, 0x0c, 0x00 };
+
 	hci_send_cmd(hci_reset, sizeof(hci_reset));
 	alarm(4);
 }
@@ -646,10 +599,7 @@ proc_reset()
 {
 	signal(SIGALRM, expired);
 
-
-	hci_send_cmd(hci_reset, sizeof(hci_reset));
-
-	alarm(4);
+	expired(0);
 
 	read_event(uart_fd, buffer);
 
@@ -666,9 +616,18 @@ static bool hci_is_event(uchar *buf)
 }
 
 void
+expired_exit(int sig)
+{
+	fprintf(stderr, "Error: Timeout waiting for event\n");
+	exit(1);
+}
+
+void
 proc_patchram()
 {
 	int len;
+
+	signal(SIGALRM, expired_exit);
 
 	alarm(4);
 	hci_send_cmd(hci_download_minidriver, sizeof(hci_download_minidriver));
@@ -740,9 +699,21 @@ proc_patchram()
 void
 proc_baudrate()
 {
+	tcflush(uart_fd, TCIOFLUSH);
+	
 	hci_send_cmd(hci_update_baud_rate, sizeof(hci_update_baud_rate));
 
 	read_event(uart_fd, buffer);
+
+	if(!hci_is_event(buffer)) {
+		fprintf(stderr, "Error: No event received to hci_update_baud_rate\n");
+		exit(1);
+	}
+
+	if(buffer[6] != 0x00) {
+		fprintf(stderr, "Error: hci_update_baud_rate failed\n");
+		exit(1);
+	}
 
 	cfsetospeed(&termios, termios_baudrate);
 	cfsetispeed(&termios, termios_baudrate);
@@ -762,14 +733,6 @@ proc_bdaddr()
 }
 
 void
-proc_enable_lpm()
-{
-	hci_send_cmd(hci_write_sleep_mode, sizeof(hci_write_sleep_mode));
-
-	read_event(uart_fd, buffer);
-}
-
-void
 proc_scopcm()
 {
 	hci_send_cmd(hci_write_sco_pcm_int,
@@ -784,25 +747,17 @@ proc_scopcm()
 }
 
 void
-proc_i2s()
-{
-	hci_send_cmd(hci_write_i2spcm_interface_param,
-		sizeof(hci_write_i2spcm_interface_param));
-
-	read_event(uart_fd, buffer);
-}
-
-void
 proc_enable_hci()
 {
 	int i = N_HCI;
-	int proto = HCI_UART_H4;
+	
 	if (ioctl(uart_fd, TIOCSETD, &i) < 0) {
 		fprintf(stderr, "Can't set line discipline\n");
 		return;
 	}
 
-	if (ioctl(uart_fd, HCIUARTSETPROTO, proto) < 0) {
+	i = HCI_UART_H4;
+	if (ioctl(uart_fd, HCIUARTSETPROTO, i) < 0) {
 		fprintf(stderr, "Can't set hci protocol\n");
 		return;
 	}
@@ -810,57 +765,13 @@ proc_enable_hci()
 	return;
 }
 
-#ifdef ANDROID
-void
-read_default_bdaddr()
-{
-	int sz;
-	int fd;
-
-	char path[PROPERTY_VALUE_MAX];
-
-	char bdaddr[18];
-	int len = 17;
-	memset(bdaddr, 0, (len + 1) * sizeof(char));
-
-	property_get("ro.bt.bdaddr_path", path, "");
-	if (path[0] == 0)
-		return;
-
-	fd = open(path, O_RDONLY);
-	if (fd < 0) {
-		fprintf(stderr, "open(%s) failed: %s (%d)", path, strerror(errno),
-				errno);
-		return;
-	}
-
-	sz = read(fd, bdaddr, len);
-	if (sz < 0) {
-		fprintf(stderr, "read(%s) failed: %s (%d)", path, strerror(errno),
-				errno);
-		close(fd);
-		return;
-	} else if (sz != len) {
-		fprintf(stderr, "read(%s) unexpected size %d", path, sz);
-		close(fd);
-		return;
-	}
-
-	if (debug) {
-		printf("Read default bdaddr of %s\n", bdaddr);
-	}
-
-	parse_bdaddr(bdaddr);
-}
-#endif
-
 
 int
 main (int argc, char **argv)
 {
-#ifdef ANDROID
-	read_default_bdaddr();
-#endif
+	struct pollfd p;
+	int err;
+	sigset_t sigs;
 
 	if (parse_cmd_line(argc, argv)) {
 		exit(1);
@@ -884,31 +795,44 @@ main (int argc, char **argv)
 		proc_patchram();
 	}
 
-	if (termios_baudrate) {
-		proc_baudrate();
-	}
-
 	if (bdaddr_flag) {
 		proc_bdaddr();
-	}
-
-	if (enable_lpm) {
-		proc_enable_lpm();
 	}
 
 	if (scopcm) {
 		proc_scopcm();
 	}
 
-	if (i2s) {
-		proc_i2s();
-	}
-
 	if (enable_hci) {
+		proc_reset();
+
+		proc_baudrate();
+
 		proc_enable_hci();
 
+		p.fd = uart_fd;
+		p.events = POLLERR | POLLHUP;
+
+		sigfillset(&sigs);
+		sigdelset(&sigs, SIGCHLD);
+		sigdelset(&sigs, SIGPIPE);
+		sigdelset(&sigs, SIGTERM);
+		sigdelset(&sigs, SIGINT);
+		sigdelset(&sigs, SIGHUP);
+
+		// poll for events
 		while (1) {
-			sleep(UINT_MAX);
+			p.revents = 0;
+			err = ppoll(&p, 1, NULL, &sigs);
+			if (err < 0 && errno == EINTR)
+				continue;
+			if (err)
+				break;
+		}
+
+	} else {
+		if (termios_baudrate) {
+			proc_baudrate();
 		}
 	}
 
