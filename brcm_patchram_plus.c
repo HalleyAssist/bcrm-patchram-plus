@@ -124,7 +124,6 @@
 #include <string.h>
 #include <signal.h>
 #include <stdbool.h>
-#include <poll.h>
 
 
 
@@ -154,7 +153,6 @@ int hcdfile_fd = -1;
 int termios_baudrate = 0;
 int bdaddr_flag = 0;
 int enable_hci = 0;
-int use_baudrate_for_download = 0;
 int debug = 0;
 int scopcm = 0;
 int no2bytes = 0;
@@ -168,15 +166,6 @@ uchar hci_download_minidriver[] = { 0x01, 0x2e, 0xfc, 0x00 };
 
 uchar hci_update_baud_rate[] = { 0x01, 0x18, 0xfc, 0x06, 0x00, 0x00,
 	0x00, 0x00, 0x00, 0x00 };
-
-uchar hci_write_bd_addr[] = { 0x01, 0x01, 0xfc, 0x06,
-	0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-uchar hci_write_sco_pcm_int[] =
-	{ 0x01, 0x1C, 0xFC, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00 };
-
-uchar hci_write_pcm_data_format[] =
-	{ 0x01, 0x1e, 0xFC, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00 };
 
 int
 parse_patchram(char *optarg)
@@ -281,63 +270,9 @@ parse_baudrate(char *optarg)
 }
 
 int
-parse_bdaddr(char *optarg)
-{
-	int bd_addr[6];
-	int i;
-
-	sscanf(optarg, "%02X:%02X:%02X:%02X:%02X:%02X",
-		&bd_addr[5], &bd_addr[4], &bd_addr[3],
-		&bd_addr[2], &bd_addr[1], &bd_addr[0]);
-
-	for (i = 0; i < 6; i++) {
-		hci_write_bd_addr[4 + i] = bd_addr[i];
-	}
-
-	bdaddr_flag = 1;
-
-	return(0);
-}
-
-int
-parse_use_baudrate_for_download(char *optarg)
-{
-	use_baudrate_for_download = 1;
-	return(0);
-}
-
-int
 parse_enable_hci(char *optarg)
 {
 	enable_hci = 1;
-	return(0);
-}
-
-int
-parse_scopcm(char *optarg)
-{
-	int param[10];
-	int ret;
-	int i;
-
-	ret = sscanf(optarg, "%d,%d,%d,%d,%d,%d,%d,%d,%d,%d",
-		&param[0], &param[1], &param[2], &param[3], &param[4],
-		&param[5], &param[6], &param[7], &param[8], &param[9]);
-
-	if (ret != 10) {
-		return(1);
-	}
-
-	scopcm = 1;
-
-	for (i = 0; i < 5; i++) {
-		hci_write_sco_pcm_int[4 + i] = param[i];
-	}
-
-	for (i = 0; i < 5; i++) {
-		hci_write_pcm_data_format[4 + i] = param[5 + i];
-	}
-
 	return(0);
 }
 
@@ -360,50 +295,6 @@ parse_tosleep(char *optarg)
 	return(0);
 }
 
-void
-usage(char *argv0)
-{
-	printf("Usage %s:\n", argv0);
-	printf("\t<-d>/<--debug n> to print a debug log\n");
-	printf("\t<--patchram patchram_file>\n");
-	printf("\t<--baudrate baud_rate>\n");
-	printf("\t<--bd_addr bd_address>\n");
-	printf("\t<--enable_hci>\n");
-	printf("\t<--use_baudrate_for_download> - Uses the\n");
-	printf("\t\tbaudrate for downloading the firmware\n");
-	printf("\t<--scopcm=sco_routing,pcm_interface_rate,frame_type,\n");
-	printf("\t\tsync_mode,clock_mode,lsb_first,fill_bits,\n");
-	printf("\t\tfill_method,fill_num,right_justify>\n");
-	printf("\n\t\tWhere\n");
-	printf("\n\t\tsco_routing is 0 for PCM, 1 for Transport,\n");
-	printf("\t\t2 for Codec and 3 for I2S,\n");
-	printf("\n\t\tpcm_interface_rate is 0 for 128KBps, 1 for\n");
-	printf("\t\t256 KBps, 2 for 512KBps, 3 for 1024KBps,\n");
-	printf("\t\tand 4 for 2048Kbps,\n");
-	printf("\n\t\tframe_type is 0 for short and 1 for long,\n");
-	printf("\t\tsync_mode is 0 for slave and 1 for master,\n");
-	printf("\n\t\tclock_mode is 0 for slabe and 1 for master,\n");
-	printf("\n\t\tlsb_first is 0 for false aand 1 for true,\n");
-	printf("\n\t\tfill_bits is the value in decimal for unused bits,\n");
-	printf("\n\t\tfill_method is 0 for 0's and 1 for 1's, 2 for\n");
-	printf("\t\tsigned and 3 for programmable,\n");
-	printf("\n\t\tfill_num is the number or bits to fill,\n");
-	printf("\n\t\tright_justify is 0 for false and 1 for true\n");
-	printf("\n\t<--i2s=i2s_enable,is_master,sample_rate,clock_rate>\n");
-	printf("\n\t\tWhere\n");
-	printf("\n\t\ti2s_enable is 0 for disable and 1 for enable,\n");
-	printf("\n\t\tis_master is 0 for slave and 1 for master,\n");
-	printf("\n\t\tsample_rate is 0 for 8KHz, 1 for 16Khz and\n");
-	printf("\t\t2 for 4 KHz,\n");
-	printf("\n\t\tclock_rate is 0 for 128KHz, 1 for 256KHz, 3 for\n");
-	printf("\t\t1024 KHz and 4 for 2048 KHz.\n\n");
-	printf("\t<--no2bytes skips waiting for two byte confirmation\n");
-	printf("\t\tbefore starting patchram download. Newer chips\n");
-	printf("\t\tdo not generate these two bytes.>\n");
-	printf("\t<--tosleep=microseconds>\n");
-	printf("\tuart_device_name\n");
-}
-
 int
 parse_cmd_line(int argc, char **argv)
 {
@@ -412,10 +303,7 @@ parse_cmd_line(int argc, char **argv)
 
 	typedef int (*PFI)();
 
-	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate,
-		parse_bdaddr, parse_enable_hci,
-		parse_use_baudrate_for_download,
-		parse_scopcm, parse_no2bytes, parse_tosleep};
+	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate, parse_enable_hci, parse_no2bytes, parse_tosleep};
 
 	while (1) {
 		int this_option_optind = optind ? optind : 1;
@@ -425,10 +313,7 @@ parse_cmd_line(int argc, char **argv)
 			{"patchram", 1, 0, 0},
 			{"debug", 1, 0, 0},
 			{"baudrate", 1, 0, 0},
-			{"bd_addr", 1, 0, 0},
 			{"enable_hci", 0, 0, 0},
-			{"use_baudrate_for_download", 0, 0, 0},
-			{"scopcm", 1, 0, 0},
 			{"no2bytes", 0, 0, 0},
 			{"tosleep", 1, 0, 0},
 			{0, 0, 0, 0}
@@ -458,16 +343,6 @@ parse_cmd_line(int argc, char **argv)
 				debug = 1;
 				break;
 
-			case '?':
-				//nobreak
-			default:
-				usage(argv[0]);
-				break;
-		}
-
-		if (ret) {
-			usage(argv[0]);
-			break;
 		}
 	}
 
@@ -688,11 +563,6 @@ proc_patchram()
 		}
 	}
 
-	if (use_baudrate_for_download) {
-		cfsetospeed(&termios, B115200);
-		cfsetispeed(&termios, B115200);
-		tcsetattr(uart_fd, TCSANOW, &termios);
-	}
 	proc_reset();
 }
 
@@ -725,28 +595,6 @@ proc_baudrate()
 }
 
 void
-proc_bdaddr()
-{
-	hci_send_cmd(hci_write_bd_addr, sizeof(hci_write_bd_addr));
-
-	read_event(uart_fd, buffer);
-}
-
-void
-proc_scopcm()
-{
-	hci_send_cmd(hci_write_sco_pcm_int,
-		sizeof(hci_write_sco_pcm_int));
-
-	read_event(uart_fd, buffer);
-
-	hci_send_cmd(hci_write_pcm_data_format,
-		sizeof(hci_write_pcm_data_format));
-
-	read_event(uart_fd, buffer);
-}
-
-void
 proc_enable_hci()
 {
 	int i = N_HCI;
@@ -769,9 +617,7 @@ proc_enable_hci()
 int
 main (int argc, char **argv)
 {
-	struct pollfd p;
 	int err;
-	sigset_t sigs;
 
 	if (parse_cmd_line(argc, argv)) {
 		exit(1);
@@ -785,22 +631,8 @@ main (int argc, char **argv)
 
 	proc_reset();
 
-	if (use_baudrate_for_download) {
-		if (termios_baudrate) {
-			proc_baudrate();
-		}
-	}
-
 	if (hcdfile_fd > 0) {
 		proc_patchram();
-	}
-
-	if (bdaddr_flag) {
-		proc_bdaddr();
-	}
-
-	if (scopcm) {
-		proc_scopcm();
 	}
 
 	if (enable_hci) {
@@ -810,26 +642,10 @@ main (int argc, char **argv)
 
 		proc_enable_hci();
 
-		p.fd = uart_fd;
-		p.events = POLLERR | POLLHUP;
-
-		sigfillset(&sigs);
-		sigdelset(&sigs, SIGCHLD);
-		sigdelset(&sigs, SIGPIPE);
-		sigdelset(&sigs, SIGTERM);
-		sigdelset(&sigs, SIGINT);
-		sigdelset(&sigs, SIGHUP);
-
-		// poll for events
+		
 		while (1) {
-			p.revents = 0;
-			err = ppoll(&p, 1, NULL, &sigs);
-			if (err < 0 && errno == EINTR)
-				continue;
-			if (err)
-				break;
+			sleep(UINT_MAX);
 		}
-
 	} else {
 		if (termios_baudrate) {
 			proc_baudrate();
