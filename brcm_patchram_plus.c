@@ -670,9 +670,11 @@ proc_patchram()
 {
 	int len;
 
+	alarm(4);
 	hci_send_cmd(hci_download_minidriver, sizeof(hci_download_minidriver));
 
 	read_event(uart_fd, buffer2);
+	alarm(0);
 
 	if(!hci_is_event(buffer2)) {
 		fprintf(stderr, "Error: No event received to hci_download_minidriver\n");
@@ -704,6 +706,7 @@ proc_patchram()
 
 		read(hcdfile_fd, &buffer[4], len);
 
+		alarm(4);
 		hci_send_cmd(buffer, len + 4);
 
 		read_event(uart_fd, buffer2);
@@ -717,6 +720,8 @@ proc_patchram()
 				exit(1);
 			}
 		}
+
+		alarm(0);
 
 		if(buffer2[6] != 0x00) {
 			fprintf(stderr, "Error: hcdfile_fd failed\n");
