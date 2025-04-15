@@ -1,107 +1,3 @@
-/*******************************************************************************
- *
- *  Copyright (C) 2009-2011 Broadcom Corporation
- *
- *  Licensed under the Apache License, Version 2.0 (the "License");
- *  you may not use this file except in compliance with the License.
- *  You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- *  Unless required by applicable law or agreed to in writing, software
- *  distributed under the License is distributed on an "AS IS" BASIS,
- *  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- *  See the License for the specific language governing permissions and
- *  limitations under the License.
- *
- ******************************************************************************/
-
-/*****************************************************************************
-**                                                                           
-**  Name:          brcm_patchram_plus.c
-**
-**  Description:   This program downloads a patchram files in the HCD format
-**                 to Broadcom Bluetooth based silicon and combo chips and
-**				   and other utility functions.
-**
-**                 It can be invoked from the command line in the form
-**						<-d> to print a debug log
-**						<--patchram patchram_file>
-**						<--baudrate baud_rate>
-**						<--bd_addr bd_address>
-**						<--enable_lpm>
-**						<--enable_hci>
-**						<--use_baudrate_for_download>
-**						<--scopcm=sco_routing,pcm_interface_rate,frame_type,
-**							sync_mode,clock_mode,lsb_first,fill_bits,
-**							fill_method,fill_num,right_justify>
-**
-**							Where
-**
-**							sco_routing is 0 for PCM, 1 for Transport,
-**							2 for Codec and 3 for I2S,
-**
-**							pcm_interface_rate is 0 for 128KBps, 1 for
-**							256 KBps, 2 for 512KBps, 3 for 1024KBps,
-**							and 4 for 2048Kbps,
-**
-**							frame_type is 0 for short and 1 for long,
-**
-**							sync_mode is 0 for slave and 1 for master,
-**
-**							clock_mode is 0 for slabe and 1 for master,
-**
-**							lsb_first is 0 for false aand 1 for true,
-**
-**							fill_bits is the value in decimal for unused bits,
-**
-**							fill_method is 0 for 0's and 1 for 1's, 2 for
-**								signed and 3 for programmable,
-**
-**							fill_num is the number or bits to fill,
-**
-**							right_justify is 0 for false and 1 for true
-**
-**						<--i2s=i2s_enable,is_master,sample_rate,clock_rate>
-**
-**							Where
-**
-**							i2s_enable is 0 for disable and 1 for enable,
-**
-**							is_master is 0 for slave and 1 for master,
-**
-**							sample_rate is 0 for 8KHz, 1 for 16Khz and
-**								2 for 4 KHz,
-**
-**							clock_rate is 0 for 128KHz, 1 for 256KHz, 3 for
-**								1024 KHz and 4 for 2048 KHz.
-**
-**						<--no2bytes skips waiting for two byte confirmation
-**							before starting patchram download. Newer chips
-**                          do not generate these two bytes.>
-**						<--tosleep=number of microsseconds to sleep before
-**							patchram download begins.>
-**						uart_device_name
-**
-**                 For example:
-**
-**                 brcm_patchram_plus -d --patchram  \
-**						BCM2045B2_002.002.011.0348.0349.hcd /dev/ttyHS0
-**
-**                 It will return 0 for success and a number greater than 0
-**                 for any errors.
-**
-**                 For Android, this program invoked using a 
-**                 "system(2)" call from the beginning of the bt_enable
-**                 function inside the file 
-**                 system/bluetooth/bluedroid/bluetooth.c.
-**
-**                 If the Android system property "ro.bt.bcm_bdaddr_path" is
-**                 set, then the bd_addr will be read from this path.
-**                 This is overridden by --bd_addr on the command line.
-**  
-******************************************************************************/
-
 // TODO: Integrate BCM support into Bluez hciattach
 
 #define _GNU_SOURCE         /* See feature_test_macros(7) */
@@ -121,6 +17,7 @@
 
 #include <unistd.h>
 
+#include <stdnoreturn.h>
 #include <string.h>
 #include <signal.h>
 #include <stdbool.h>
@@ -152,10 +49,7 @@ int uart_fd = -1;
 int hcdfile_fd = -1;
 int termios_baudrate = 0;
 int bdaddr_flag = 0;
-int enable_hci = 0;
 int debug = 0;
-int scopcm = 0;
-int no2bytes = 0;
 int tosleep = 0;
 
 struct termios termios;
@@ -277,13 +171,6 @@ parse_enable_hci(char *optarg)
 }
 
 int
-parse_no2bytes(char *optarg)
-{
-	no2bytes = 1;
-	return(0);
-}
-
-int
 parse_tosleep(char *optarg)
 {
 	tosleep = atoi(optarg);
@@ -303,7 +190,7 @@ parse_cmd_line(int argc, char **argv)
 
 	typedef int (*PFI)();
 
-	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate, parse_enable_hci, parse_no2bytes, parse_tosleep};
+	PFI parse[] = { parse_patchram, parse_debug, parse_baudrate, parse_enable_hci, parse_tosleep};
 
 	while (1) {
 		int this_option_optind = optind ? optind : 1;
@@ -314,7 +201,6 @@ parse_cmd_line(int argc, char **argv)
 			{"debug", 1, 0, 0},
 			{"baudrate", 1, 0, 0},
 			{"enable_hci", 0, 0, 0},
-			{"no2bytes", 0, 0, 0},
 			{"tosleep", 1, 0, 0},
 			{0, 0, 0, 0}
 		};
@@ -520,10 +406,6 @@ proc_patchram()
 		exit(1);
 	}
 
-	if (!no2bytes) {
-		read(uart_fd, &buffer[0], 2);
-	}
-
 	if (tosleep) {
 		usleep(tosleep);
 	}
@@ -594,7 +476,7 @@ proc_baudrate()
 	}
 }
 
-void
+noreturn void
 proc_enable_hci()
 {
 	int i = N_HCI;
@@ -610,7 +492,10 @@ proc_enable_hci()
 		return;
 	}
 	fprintf(stderr, "Done setting line discpline\n");
-	return;
+		
+	while (1) {
+		sleep(UINT_MAX);
+	}
 }
 
 
@@ -633,24 +518,14 @@ main (int argc, char **argv)
 
 	if (hcdfile_fd > 0) {
 		proc_patchram();
+		close(hcdfile_fd);
 	}
 
-	if (enable_hci) {
-		proc_reset();
+	proc_reset();
 
-		proc_baudrate();
+	proc_baudrate();
 
-		proc_enable_hci();
-
-		
-		while (1) {
-			sleep(UINT_MAX);
-		}
-	} else {
-		if (termios_baudrate) {
-			proc_baudrate();
-		}
-	}
+	proc_enable_hci();
 
 	exit(0);
 }
